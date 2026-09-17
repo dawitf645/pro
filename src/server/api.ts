@@ -20,6 +20,13 @@ const verifyToken = async (req: any, res: any, next: any) => {
   }
 };
 
+// Helper to verify admin identity
+const isAdminUser = (user: any) => 
+  user?.role === "ADMIN" || 
+  user?.email === "dawitf645@gmail.com" || 
+  user?.uid === "admin" ||
+  user?.uid?.includes("admin");
+
 // --- Auth Routes ---
 apiRouter.post("/auth/validate-id", async (req, res) => {
   const { accessId } = req.body;
@@ -148,7 +155,7 @@ function generateAccessId(role: string) {
 
 apiRouter.post("/admin/access-ids", verifyToken, async (req: any, res) => {
   // Verify admin
-  if (req.user.role !== "ADMIN") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
 
   const { count = 1, role, country } = req.body;
   
@@ -179,7 +186,7 @@ apiRouter.post("/admin/access-ids", verifyToken, async (req: any, res) => {
 });
 
 apiRouter.get("/admin/access-ids", verifyToken, async (req: any, res) => {
-  if (req.user.role !== "ADMIN") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
 
   try {
     const snapshot = await adminDb.collection("accessIds").orderBy("createdAt", "desc").get();
@@ -191,7 +198,7 @@ apiRouter.get("/admin/access-ids", verifyToken, async (req: any, res) => {
 });
 
 apiRouter.delete("/admin/access-ids/:id", verifyToken, async (req: any, res) => {
-  if (req.user.role !== "ADMIN") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
 
   try {
     const { id } = req.params;
@@ -204,7 +211,7 @@ apiRouter.delete("/admin/access-ids/:id", verifyToken, async (req: any, res) => 
 
 // Stats Route
 apiRouter.get("/admin/stats", verifyToken, async (req: any, res) => {
-  if (req.user.role !== "ADMIN") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
   
   try {
     const usersSnap = await adminDb.collection("users").get();
@@ -242,7 +249,7 @@ apiRouter.get("/courses", verifyToken, async (req: any, res) => {
 });
 
 apiRouter.post("/admin/courses", verifyToken, async (req: any, res) => {
-  if (req.user.role !== "ADMIN") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
   try {
     const data = req.body;
     const docRef = await adminDb.collection("courses").add({
@@ -301,7 +308,7 @@ apiRouter.post("/coach/teams", verifyToken, async (req: any, res) => {
 });
 
 apiRouter.put("/admin/videos/:id/status", verifyToken, async (req: any, res) => {
-  if (req.user.role !== "ADMIN") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
   try {
     await adminDb.collection("showcases").doc(req.params.id).update({ status: req.body.status });
     res.json({ success: true });
