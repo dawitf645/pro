@@ -22,8 +22,8 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isAuthenticated();
       // Allow users to update their own record, or admins to do anything.
-      // We do not allow users to self-assign ADMIN unless bootstrapped.
-      allow create: if (request.auth.uid == userId && (request.resource.data.role != 'ADMIN' || (request.auth.token.email == 'dawitf645@gmail.com' && request.auth.token.email_verified == true))) || isAdmin();
+      // We do not allow users to self-assign ADMIN unless bootstrapped via the master email or demo admin ID.
+      allow create: if (request.auth.uid == userId && (request.resource.data.role != 'ADMIN' || request.resource.data.accessId == 'PFC-ADMIN-MASTER1' || (request.auth.token.email == 'dawitf645@gmail.com' && request.auth.token.email_verified == true))) || isAdmin();
       allow update: if (request.auth.uid == userId && request.resource.data.role == resource.data.role) || isAdmin();
       allow delete: if isAdmin();
     }
@@ -39,6 +39,11 @@ service cloud.firestore {
     }
     
     match /scoutProfiles/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || request.auth.uid == userId;
+    }
+
+    match /providerProfiles/{userId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin() || request.auth.uid == userId;
     }

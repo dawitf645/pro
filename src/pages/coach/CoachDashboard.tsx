@@ -11,9 +11,7 @@ import {
   Megaphone,
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { auth, db } from "../../lib/firebase";
-import { signOut } from "firebase/auth";
-import { getDoc, doc } from "firebase/firestore";
+import { onAppAuthChange, logoutAppUser, AppUser } from "../../lib/authSession";
 
 import DashboardShell from "../../components/dashboard/DashboardShell";
 import CoachOverview from "./views/CoachOverview";
@@ -30,37 +28,23 @@ import CoachSettings from "./views/CoachSettings";
 
 export default function CoachDashboard() {
   const navigate = useNavigate();
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
-      if (firebaseUser) {
-        try {
-          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
-          if (userDoc.exists() && userDoc.data().role === "COACH") {
-            setUser({
-              uid: firebaseUser.uid,
-              name: firebaseUser.displayName || "Coach",
-              email: firebaseUser.email,
-              ...userDoc.data(),
-            });
-          } else {
-            navigate("/");
-          }
-        } catch (e) {
-          navigate("/");
-        }
+    const unsubscribe = onAppAuthChange((appUser) => {
+      if (appUser && (appUser.role === "COACH" || appUser.role === "ADMIN")) {
+        setUser(appUser);
+        setLoading(false);
       } else {
-        navigate("/");
+        navigate("/access");
       }
-      setLoading(false);
     });
     return () => unsubscribe();
   }, [navigate]);
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await logoutAppUser();
     navigate("/");
   };
 

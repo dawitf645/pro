@@ -10,8 +10,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { auth } from "../../lib/firebase";
-import { signOut } from "firebase/auth";
+import { onAppAuthChange, logoutAppUser, AppUser } from "../../lib/authSession";
 
 import DashboardShell from "../../components/dashboard/DashboardShell";
 import PlayerOverview from "./views/PlayerOverview";
@@ -27,27 +26,23 @@ import PlayerNotifications from "./views/PlayerNotifications";
 
 export default function PlayerDashboard() {
   const navigate = useNavigate();
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
-      if (firebaseUser) {
-        setUser({
-          uid: firebaseUser.uid,
-          name: firebaseUser.displayName || "Player",
-          email: firebaseUser.email,
-        });
+    const unsubscribe = onAppAuthChange((appUser) => {
+      if (appUser) {
+        setUser(appUser);
         setLoading(false);
       } else {
-        navigate("/");
+        navigate("/access");
       }
     });
     return () => unsubscribe();
   }, [navigate]);
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await logoutAppUser();
     navigate("/");
   };
 

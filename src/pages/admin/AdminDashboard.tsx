@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { auth, db } from "../../lib/firebase";
-import { signOut } from "firebase/auth";
+import { onAppAuthChange, logoutAppUser } from "../../lib/authSession";
 import { getDoc, doc, setDoc } from "firebase/firestore";
 
 import DashboardShell from "../../components/dashboard/DashboardShell";
@@ -26,39 +26,40 @@ import AdminCommunications from "./views/AdminCommunications";
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [currentAdmin, setCurrentAdmin] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
-      if (user) {
-        try {
-          const userDoc = await getDoc(doc(db, "users", user.uid));
-          const isMasterEmail = user.email === "dawitf645@gmail.com";
-          if (isMasterEmail || (userDoc.exists() && userDoc.data().role === "ADMIN")) {
-            setIsAdmin(true);
-            if (!userDoc.exists() || userDoc.data()?.role !== "ADMIN") {
-              await setDoc(
-                doc(db, "users", user.uid),
-                {
-                  uid: user.uid,
-                  name: user.displayName || "Dawit (Master Admin)",
-                  email: user.email,
-                  role: "ADMIN",
-                  status: "ACTIVE",
-                  createdAt: new Date(),
-                  lastLoginAt: new Date(),
-                },
-                { merge: true }
-              );
-            }
-          } else {
-            navigate("/"); // Not admin
+    const unsubscribe = onAppAuthChange(async (appUser) => {
+      if (appUser) {
+        const isMasterEmail = appUser.email === "dawitf645@gmail.com";
+        const isMasterId = appUser.accessId === "PFC-ADMIN-MASTER1";
+        const hasAdminRole = appUser.role === "ADMIN";
+
+        if (isMasterEmail || isMasterId || hasAdminRole) {
+          setIsAdmin(true);
+          setCurrentAdmin(appUser);
+          try {
+            await setDoc(
+              doc(db, "users", appUser.uid),
+              {
+                uid: appUser.uid,
+                name: appUser.name || "Dawit (Master Admin)",
+                email: appUser.email || "dawitf645@gmail.com",
+                role: "ADMIN",
+                status: "ACTIVE",
+                lastLoginAt: new Date(),
+              },
+              { merge: true }
+            );
+          } catch (e) {
+            // ignore
           }
-        } catch (e) {
-          navigate("/");
+        } else {
+          navigate("/access");
         }
       } else {
-        navigate("/");
+        navigate("/access");
       }
       setLoading(false);
     });
@@ -66,7 +67,7 @@ export default function AdminDashboard() {
   }, [navigate]);
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await logoutAppUser();
     navigate("/");
   };
 
@@ -93,9 +94,9 @@ export default function AdminDashboard() {
   if (!isAdmin) return null;
 
   const adminUser = {
-    uid: auth.currentUser?.uid || "admin",
-    name: auth.currentUser?.displayName || "Dawit (Master Admin)",
-    email: auth.currentUser?.email || "admin@profootballclass.com",
+    uid: currentAdmin?.uid || auth.currentUser?.uid || "admin",
+    name: currentAdmin?.name || auth.currentUser?.displayName || "Dawit (Master Admin)",
+    email: currentAdmin?.email || auth.currentUser?.email || "dawitf645@gmail.com",
   };
 
   return (

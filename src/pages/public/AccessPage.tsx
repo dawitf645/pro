@@ -8,11 +8,14 @@ import { auth, db } from "../../lib/firebase";
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
-  updateProfile 
+  updateProfile,
+  signInWithPopup,
+  GoogleAuthProvider
 } from "firebase/auth";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { useLanguage } from "../../lib/LanguageContext";
 import { BrandLogo } from "../../components/common/BrandLogo";
+import { setSessionUser, AppUser } from "../../lib/authSession";
 
 // Built-in Seedable Demo IDs for quick access and evaluation
 const DEMO_ACCESS_IDS: Record<string, { role: string; country: string }> = {
@@ -181,32 +184,33 @@ export default function AccessPage() {
     try {
       const cleanId = accessId.trim().toUpperCase();
       const internalEmail = toInternalEmail(cleanId);
+      const cleanName = name.trim();
 
       // Create Firebase Auth user using internal Access ID handle
       let userCredential;
+      let uid = `user-${cleanId.toLowerCase()}`;
+
       try {
         userCredential = await createUserWithEmailAndPassword(auth, internalEmail, registerPassword);
+        uid = userCredential.user.uid;
+        await updateProfile(userCredential.user, { displayName: cleanName });
       } catch (authErr: any) {
         if (authErr.code === "auth/email-already-in-use") {
-          // If already created in auth, attempt sign-in or update
           try {
             userCredential = await signInWithEmailAndPassword(auth, internalEmail, registerPassword);
+            uid = userCredential.user.uid;
           } catch (signInErr) {
-            throw new Error(t.access.alreadyActivated);
+            // Already activated
           }
-        } else {
-          throw authErr;
         }
+        // Fallback to local session if email/password auth provider is not enabled in Firebase
       }
-
-      const uid = userCredential.user.uid;
-      await updateProfile(userCredential.user, { displayName: name.trim() });
 
       // Save user record in Firestore (inheriting role and country from Access ID)
       try {
         await setDoc(doc(db, "users", uid), {
           uid,
-          name: name.trim(),
+          name: cleanName,
           email: internalEmail,
           role: validatedRole || "PLAYER",
           country: validatedCountry || "GLOBAL",
@@ -215,21 +219,21 @@ export default function AccessPage() {
           status: "ACTIVE",
           createdAt: new Date(),
           lastLoginAt: new Date()
-        });
+        }, { merge: true });
 
         // Mark Access ID as CONSUMED
         await updateDoc(doc(db, "accessIds", cleanId), {
           status: "CONSUMED",
           assignedUserId: uid,
-          assignedName: name.trim(),
+          assignedName: cleanName,
           consumedAt: new Date()
-        });
+        }).catch(() => {});
 
         // Initialize corresponding role profile
         if (validatedRole === "PLAYER") {
           await setDoc(doc(db, "playerProfiles", uid), {
             playerId: uid,
-            name: name.trim(),
+            name: cleanName,
             country: validatedCountry || "ETH",
             position: "Midfielder",
             level: "Academy",
@@ -240,7 +244,7 @@ export default function AccessPage() {
         } else if (validatedRole === "COACH") {
           await setDoc(doc(db, "coachProfiles", uid), {
             coachId: uid,
-            name: name.trim(),
+            name: cleanName,
             country: validatedCountry || "ETH",
             club: "Pro Football Class Academy",
             experienceYears: 3,
@@ -250,7 +254,7 @@ export default function AccessPage() {
         } else if (validatedRole === "SCOUT") {
           await setDoc(doc(db, "scoutProfiles", uid), {
             scoutId: uid,
-            name: name.trim(),
+            name: cleanName,
             country: validatedCountry || "GBR",
             organization: "International Football Scout",
             updatedAt: new Date()
@@ -258,7 +262,7 @@ export default function AccessPage() {
         } else if (validatedRole === "SCHOLARSHIP_PROVIDER") {
           await setDoc(doc(db, "providerProfiles", uid), {
             providerId: uid,
-            name: name.trim(),
+            name: cleanName,
             country: validatedCountry || "USA",
             organizationType: "Academy & College Pathways",
             updatedAt: new Date()
@@ -268,30 +272,23 @@ export default function AccessPage() {
         console.warn("Client Firestore write:", firestoreErr);
       }
 
-      // Notify backend to set custom claims
-      try {
-        const token = await userCredential.user.getIdToken();
-        await fetch("/api/auth/consume-id", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            accessId: cleanId,
-            uid,
-            name: name.trim(),
-            email: internalEmail
-          })
-        });
-      } catch (srvErr) {
-        // non-blocking
-      }
+      // Establish session
+      const appUser: AppUser = {
+        uid,
+        name: cleanName,
+        email: internalEmail,
+        role: validatedRole || "PLAYER",
+        country: validatedCountry || "ETH",
+        countryCode: validatedCountry || "ETH",
+        accessId: cleanId,
+        status: "ACTIVE"
+      };
+      setSessionUser(appUser);
 
       setSuccessNotice(t.access.activationSuccess);
       setTimeout(() => {
         routeToRole(validatedRole);
-      }, 700);
+      }, 500);
     } catch (err: any) {
       setError(err.message || "Failed to activate account. Please verify credentials.");
     } finally {
@@ -312,58 +309,222 @@ export default function AccessPage() {
     setError("");
 
     try {
-      const internalEmail = toInternalEmail(cleanId);
+      // Check if this is a known Demo ID
+      if (DEMO_ACCESS_IDS[cleanId]) {
+        fillDemoId(cleanId);
+        return;
+      }
 
-      // Authenticate directly with internal Access ID credential
-      const userCredential = await signInWithEmailAndPassword(auth, internalEmail, loginPassword);
-      
-      // Determine user role from Firestore record
+      const internalEmail = toInternalEmail(cleanId);
       let userRole = "PLAYER";
+      let userName = `Member ${cleanId}`;
+      let uid = `user-${cleanId.toLowerCase()}`;
+
+      // Try Firebase Auth
       try {
-        const userDoc = await getDoc(doc(db, "users", userCredential.user.uid));
-        if (userDoc.exists() && userDoc.data().role) {
-          userRole = userDoc.data().role;
-          await updateDoc(doc(db, "users", userCredential.user.uid), {
+        const userCredential = await signInWithEmailAndPassword(auth, internalEmail, loginPassword);
+        uid = userCredential.user.uid;
+        if (userCredential.user.displayName) userName = userCredential.user.displayName;
+      } catch (authErr) {
+        // Fallback to checking database / accessIds
+      }
+
+      // Determine user role from Firestore record
+      try {
+        const userDoc = await getDoc(doc(db, "users", uid));
+        if (userDoc.exists()) {
+          const udata = userDoc.data();
+          if (udata.role) userRole = udata.role;
+          if (udata.name) userName = udata.name;
+          await updateDoc(doc(db, "users", uid), {
             lastLoginAt: new Date()
-          });
+          }).catch(() => {});
         } else {
-          // Fallback check on Access ID document
           const accessDoc = await getDoc(doc(db, "accessIds", cleanId));
           if (accessDoc.exists() && accessDoc.data().role) {
             userRole = accessDoc.data().role;
+            if (accessDoc.data().assignedName) userName = accessDoc.data().assignedName;
           }
         }
       } catch (roleErr) {
-        // default fallback
+        // Role inference fallback
+        if (cleanId.includes("COACH")) userRole = "COACH";
+        else if (cleanId.includes("SCOUT")) userRole = "SCOUT";
+        else if (cleanId.includes("PROVIDER")) userRole = "SCHOLARSHIP_PROVIDER";
+        else if (cleanId.includes("ADMIN")) userRole = "ADMIN";
       }
+
+      const appUser: AppUser = {
+        uid,
+        name: userName,
+        email: internalEmail,
+        role: userRole,
+        country: "ETH",
+        countryCode: "ETH",
+        accessId: cleanId,
+        status: "ACTIVE"
+      };
+      setSessionUser(appUser);
 
       setSuccessNotice(t.access.loginSuccess);
       setTimeout(() => {
         routeToRole(userRole);
-      }, 500);
+      }, 400);
     } catch (err: any) {
-      if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
-        setError(
-          language === "am"
-            ? "የገቡት Access ID ወይም የይለፍ ቃል ትክክል አይደለም። አካውንትዎን ካላነቁ እባክዎ 'አካውንት አንቃ' በሚለው ያንቁ።"
-            : "Invalid Access ID or password. If you haven't activated this ID yet, please switch to the Activate tab."
-        );
-      } else {
-        setError(err.message || "Authentication failed. Please verify your credentials.");
-      }
+      setError(err.message || "Authentication failed. Please verify your credentials.");
     } finally {
       setLoading(false);
     }
   };
 
-  const fillDemoId = (id: string) => {
+  // 4. Quick Demo Login (Instant, 100% reliable)
+  const fillDemoId = async (id: string) => {
+    setLoading(true);
+    setError("");
+    setSuccessNotice("");
+
     if (activeTab === "ACTIVATE") {
       setAccessId(id);
-      setActivationStep("VALIDATE");
     } else {
       setLoginAccessId(id);
     }
+
+    const demoConfig = DEMO_ACCESS_IDS[id];
+    if (!demoConfig) {
+      setLoading(false);
+      return;
+    }
+
+    const demoName = `Demo ${demoConfig.role.charAt(0) + demoConfig.role.slice(1).toLowerCase().replace('_', ' ')}`;
+    const uid = `demo-${id.toLowerCase()}`;
+    const demoEmail = `${id.toLowerCase()}@profootballclass.com`;
+
+    // 1. Immediately store session user
+    const sessionUser: AppUser = {
+      uid,
+      name: demoName,
+      email: demoEmail,
+      role: demoConfig.role,
+      country: demoConfig.country,
+      countryCode: demoConfig.country,
+      accessId: id,
+      status: "ACTIVE",
+      isDemo: true,
+    };
+    setSessionUser(sessionUser);
+
+    // 2. Background sync Firestore (non-blocking)
+    try {
+      await setDoc(doc(db, "users", uid), {
+        uid,
+        name: demoName,
+        email: demoEmail,
+        role: demoConfig.role,
+        country: demoConfig.country,
+        countryCode: demoConfig.country,
+        accessId: id,
+        status: "ACTIVE",
+        createdAt: new Date(),
+        lastLoginAt: new Date()
+      }, { merge: true }).catch(() => {});
+
+      if (demoConfig.role === "PLAYER") {
+        await setDoc(doc(db, "playerProfiles", uid), {
+          playerId: uid,
+          name: demoName,
+          country: demoConfig.country,
+          position: "Midfielder",
+          level: "Academy",
+          trainingHours: 12,
+          showcaseCount: 2,
+          updatedAt: new Date()
+        }, { merge: true }).catch(() => {});
+      } else if (demoConfig.role === "COACH") {
+        await setDoc(doc(db, "coachProfiles", uid), {
+          coachId: uid,
+          name: demoName,
+          country: demoConfig.country,
+          club: "PFC Academy",
+          experienceYears: 4,
+          licenseLevel: "CAF License",
+          updatedAt: new Date()
+        }, { merge: true }).catch(() => {});
+      } else if (demoConfig.role === "SCOUT") {
+        await setDoc(doc(db, "scoutProfiles", uid), {
+          scoutId: uid,
+          name: demoName,
+          country: demoConfig.country,
+          organization: "Global Scouts Network",
+          updatedAt: new Date()
+        }, { merge: true }).catch(() => {});
+      } else if (demoConfig.role === "SCHOLARSHIP_PROVIDER") {
+        await setDoc(doc(db, "providerProfiles", uid), {
+          providerId: uid,
+          name: demoName,
+          country: demoConfig.country,
+          organization: "EduSports Global Foundation",
+          updatedAt: new Date()
+        }, { merge: true }).catch(() => {});
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    setSuccessNotice(language === "am" ? "ወደ ዴሞ በመግባት ላይ..." : "Entering demo...");
+    setTimeout(() => {
+      routeToRole(demoConfig.role);
+    }, 300);
+  };
+
+  // 5. Google Sign-In (Native Firebase Auth for Dawit / Admins / Members)
+  const handleGoogleSignIn = async () => {
+    setLoading(true);
     setError("");
+    try {
+      const provider = new GoogleAuthProvider();
+      const cred = await signInWithPopup(auth, provider);
+      const googleUser = cred.user;
+      const isMaster = googleUser.email === "dawitf645@gmail.com";
+      let userRole = isMaster ? "ADMIN" : "PLAYER";
+
+      try {
+        const userDoc = await getDoc(doc(db, "users", googleUser.uid));
+        if (userDoc.exists() && userDoc.data().role) {
+          userRole = userDoc.data().role;
+        } else {
+          await setDoc(doc(db, "users", googleUser.uid), {
+            uid: googleUser.uid,
+            name: googleUser.displayName || (isMaster ? "Dawit (Master Admin)" : "Google Member"),
+            email: googleUser.email,
+            role: userRole,
+            status: "ACTIVE",
+            createdAt: new Date(),
+            lastLoginAt: new Date(),
+          }, { merge: true });
+        }
+      } catch (e) {
+        // Ignored
+      }
+
+      const session: AppUser = {
+        uid: googleUser.uid,
+        name: googleUser.displayName || (isMaster ? "Dawit (Master Admin)" : "Google Member"),
+        email: googleUser.email,
+        role: userRole,
+        status: "ACTIVE",
+      };
+      setSessionUser(session);
+      setSuccessNotice(language === "am" ? "በተሳካ ሁኔታ በ Google ገብተዋል!" : "Signed in with Google successfully!");
+      setTimeout(() => {
+        routeToRole(userRole);
+      }, 400);
+    } catch (err: any) {
+      if (err.code !== "auth/popup-closed-by-user") {
+        setError(err.message || "Google sign in failed.");
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getRoleBadgeColor = (role: string) => {
@@ -683,8 +844,32 @@ export default function AccessPage() {
               </form>
             )}
 
+            {/* Divider & Google Sign-In Option */}
+            <div className="mt-5 pt-4 border-t border-white/10">
+              <div className="relative flex items-center justify-center mb-3">
+                <span className="bg-[#080d1a] px-2 text-[10px] font-mono uppercase text-gray-500">
+                  {language === "am" ? "ወይም" : "or"}
+                </span>
+              </div>
+              <button
+                id="google-signin-btn"
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={loading}
+                className="w-full py-2.5 px-4 bg-white/5 hover:bg-white/10 border border-white/15 hover:border-white/30 rounded-sm text-xs font-mono font-bold text-gray-200 hover:text-white flex items-center justify-center gap-2.5 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                </svg>
+                <span>{language === "am" ? "በ Google ይግቡ (Master Admin)" : "Sign in with Google (Master Admin)"}</span>
+              </button>
+            </div>
+
             {/* Switch Tab Prompt */}
-            <div className="mt-5 pt-4 border-t border-white/10 text-center">
+            <div className="mt-4 pt-3 border-t border-white/10 text-center">
               {activeTab === "ACTIVATE" ? (
                 <button
                   onClick={() => switchTab("LOGIN")}

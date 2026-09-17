@@ -12,8 +12,8 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { auth, db } from "../../lib/firebase";
-import { signOut } from "firebase/auth";
+import { db } from "../../lib/firebase";
+import { onAppAuthChange, logoutAppUser, AppUser } from "../../lib/authSession";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { fetchWithAuth } from "../../lib/fetchWithAuth";
 import { scoutService } from "./services/scoutService";
@@ -34,7 +34,7 @@ import ScoutContactModal from "./components/ScoutContactModal";
 
 export default function ScoutDashboard() {
   const navigate = useNavigate();
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [scoutProfile, setScoutProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
@@ -44,35 +44,19 @@ export default function ScoutDashboard() {
   const [selectedPlayerForContact, setSelectedPlayerForContact] = useState<PlayerPublicProfile | null>(null);
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
-      if (firebaseUser) {
+    const unsubscribe = onAppAuthChange(async (appUser) => {
+      if (appUser && (appUser.role === "SCOUT" || appUser.role === "ADMIN")) {
+        setUser(appUser);
         try {
-          const res = await fetchWithAuth("/api/auth/me");
-          const data = await res.json();
-          if (!data.error) {
-            setUser(data);
-            const sProfile = await scoutService.getScoutProfile(firebaseUser.uid);
-            setScoutProfile(sProfile);
-          } else {
-            setUser({
-              uid: firebaseUser.uid,
-              name: firebaseUser.displayName || "Scout Representative",
-              email: firebaseUser.email,
-              role: "SCOUT",
-            });
-          }
+          const sProfile = await scoutService.getScoutProfile(appUser.uid);
+          setScoutProfile(sProfile);
         } catch (e) {
-          setUser({
-            uid: firebaseUser.uid,
-            name: firebaseUser.displayName || "Scout Representative",
-            email: firebaseUser.email,
-            role: "SCOUT",
-          });
+          // ignore
         } finally {
           setLoading(false);
         }
       } else {
-        navigate("/");
+        navigate("/access");
       }
     });
 
@@ -98,7 +82,7 @@ export default function ScoutDashboard() {
   }, [user?.uid]);
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await logoutAppUser();
     navigate("/");
   };
 

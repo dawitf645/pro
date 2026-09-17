@@ -21,7 +21,7 @@ import {
   ExternalLink
 } from "lucide-react";
 import { auth, db } from "../../lib/firebase";
-import { onAuthStateChanged, signOut, User } from "firebase/auth";
+import { onAppAuthChange, logoutAppUser, AppUser } from "../../lib/authSession";
 import { doc, getDoc, collection, query, where, onSnapshot } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { BrandLogo } from "../../components/common/BrandLogo";
@@ -52,7 +52,7 @@ import ProviderPlayerProfileModal from "./components/ProviderPlayerProfileModal"
 
 export default function ProviderDashboard() {
   const navigate = useNavigate();
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [profile, setProfile] = useState<ProviderProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,23 +76,17 @@ export default function ProviderDashboard() {
   const [unreadMessages, setUnreadMessages] = useState(0);
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
+    const unsubscribeAuth = onAppAuthChange(async (appUser) => {
+      if (!appUser) {
         setLoading(false);
+        navigate("/access");
         return;
       }
 
-      setCurrentUser(user);
+      setCurrentUser(appUser);
 
       try {
-        // Fetch user document to check role
-        const userDocRef = doc(db, "users", user.uid);
-        const userDoc = await getDoc(userDocRef);
-
-        let role: UserRole = "SCHOLARSHIP_PROVIDER";
-        if (userDoc.exists()) {
-          role = userDoc.data().role as UserRole;
-        }
+        const role = (appUser.role || "SCHOLARSHIP_PROVIDER") as UserRole;
         setUserRole(role);
 
         // Verify role authorization
@@ -103,11 +97,11 @@ export default function ProviderDashboard() {
         }
 
         // Fetch or create Provider Profile
-        const provProfile = await providerService.getProviderProfile(user.uid);
+        const provProfile = await providerService.getProviderProfile(appUser.uid);
         setProfile(provProfile);
 
         // Load initial shortlist IDs
-        const sl = await providerService.getShortlist(user.uid);
+        const sl = await providerService.getShortlist(appUser.uid);
         setShortlistIds(new Set(sl.map(s => s.playerId)));
 
         setLoading(false);
@@ -119,7 +113,7 @@ export default function ProviderDashboard() {
     });
 
     return () => unsubscribeAuth();
-  }, []);
+  }, [navigate]);
 
   // Listen for unread notifications and messages
   useEffect(() => {
@@ -152,7 +146,7 @@ export default function ProviderDashboard() {
   }, [currentUser]);
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await logoutAppUser();
     navigate("/access");
   };
 
